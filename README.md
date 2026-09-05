@@ -16,6 +16,23 @@ V2 totalement séparée du tracker V1. Elle suit trois profils Roblox avec des d
 
 Chaque session est arrondie séparément : `floor(durée / intervalle)`. Aucun reliquat ne passe à la session suivante.
 
+Une première présence `Offline` pendant une session ne la clôture pas immédiatement. Elle passe en attente de confirmation :
+
+- retour dans l’AFK World au scan suivant : même session continuée, trou conservé ;
+- second scan `Offline` : fin confirmée à l’heure du premier scan Offline ;
+- changement direct vers Ink Game ou un autre jeu : fin immédiate.
+
+## Administration
+
+Le bouton `ADMIN` utilise uniquement `ADMIN_SECRET`. Une fois connecté, les crayons du dashboard permettent de corriger les totaux et chaque donnée utile d’une session.
+
+- création, modification et suppression de sessions ;
+- sélection de plusieurs sessions puis fusion, en incluant la fausse coupure ;
+- recalcul automatique de la durée, des récompenses, du temps crédité et des totaux ;
+- option explicite `Désynchroniser les changements` pour conserver des valeurs manuelles indépendantes sur une session.
+
+Toutes les actions restent isolées par profil et sont inscrites dans les logs.
+
 ## Variables d’environnement
 
 Copier `.env.example` vers `.env.local` uniquement dans ce projet V2 :

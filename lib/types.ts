@@ -32,6 +32,7 @@ export type ActiveSession = {
   id: string;
   startedAt: number;
   observedSeconds: number;
+  pendingDisconnectAt: number | null;
 };
 
 export type ProfileState = PresenceSnapshot & {
@@ -68,6 +69,7 @@ export type CompletedSession = {
   createdAt: number;
   updatedAt: number;
   source: "automatic" | "admin";
+  synchronized: boolean;
 };
 
 export type ManualAdjustment = {
@@ -147,6 +149,7 @@ export type ProfileStatus = {
     lastCheckAgeSeconds: number | null;
     currentSessionSeconds: number;
     sessionStartedAt: number | null;
+    disconnectPending: boolean;
   };
   sessionsToday: number;
 };

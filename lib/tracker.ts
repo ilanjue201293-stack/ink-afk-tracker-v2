@@ -5,7 +5,13 @@ import {
   STALE_AFTER_SECONDS,
   isProfileId,
 } from "./config";
-import { probabilitySummary, parisDateKey, rebuildDerived, totalsFrom } from "./domain";
+import {
+  probabilitySummary,
+  parisDateKey,
+  rebuildDerived,
+  synchronizedSessionValues,
+  totalsFrom,
+} from "./domain";
 import { deliverEffect } from "./discord";
 import { processProfilePresence } from "./engine";
 import { acquireLock, releaseLock } from "./redis";
@@ -49,6 +55,7 @@ function statusFor(profileId: ProfileId, record: ProfileRecord, now: number): Pr
         ? record.state.activeSession.observedSeconds + liveExtra
         : 0,
       sessionStartedAt: record.state?.activeSession?.startedAt || null,
+      disconnectPending: Boolean(record.state?.activeSession?.pendingDisconnectAt),
     },
     sessionsToday: record.sessions.filter((session) => parisDateKey(session.startedAt) === today).length,
   };
@@ -106,6 +113,13 @@ function textField(value: unknown, fallback: string) {
   return parsed || fallback;
 }
 
+function booleanField(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return fallback;
+}
+
 function adminLog(profileId: ProfileId, title: string, detail: string, at: number, sessionId?: string) {
   return {
     id: crypto.randomUUID(),
@@ -160,64 +174,191 @@ const END_REASONS: SessionEndReason[] = [
   "manual",
 ];
 
-function updateSession(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
-  const sessionId = textField(input.sessionId, "");
-  const index = record.sessions.findIndex((session) => session.id === sessionId);
-  if (index < 0) throw new Error("Session introuvable");
+function sessionFromInput(
+  profileId: ProfileId,
+  input: Record<string, unknown>,
+  now: number,
+  previous?: CompletedSession,
+) {
   const startedAt = Math.floor(numberField(input.startedAt, "Début", 1));
   const endedAt = Math.floor(numberField(input.endedAt, "Fin", startedAt + 1));
-  const durationSeconds = Math.floor(numberField(input.durationSeconds, "Durée"));
-  if (Math.abs(endedAt - startedAt - durationSeconds * 1000) > 1000) {
-    throw new Error("La durée doit correspondre exactement au début et à la fin");
-  }
   const interval = Math.floor(numberField(input.rewardIntervalMinutes, "Intervalle", 1));
-  const rewards = Math.floor(numberField(input.rewardsEarned, "Récompenses"));
-  const creditedSeconds = Math.floor(numberField(input.creditedAfkSeconds, "Temps crédité"));
-  if (creditedSeconds !== rewards * interval * 60) {
-    throw new Error("Le temps crédité doit correspondre aux récompenses × intervalle");
-  }
+  const synchronized = booleanField(input.synchronized, true);
+  const synced = synchronizedSessionValues(startedAt, endedAt, interval);
+  const durationSeconds = synchronized
+    ? synced.durationSeconds
+    : Math.floor(numberField(input.durationSeconds, "Durée"));
+  const rewards = synchronized
+    ? synced.rewards
+    : Math.floor(numberField(input.rewardsEarned, "Récompenses"));
+  const creditedSeconds = synchronized
+    ? synced.creditedAfkSeconds
+    : Math.floor(numberField(input.creditedAfkSeconds, "Temps crédité"));
   const reason = END_REASONS.includes(input.endReason as SessionEndReason)
     ? (input.endReason as SessionEndReason)
     : "manual";
-  const previous = record.sessions[index];
-  const updated: CompletedSession = {
-    ...previous,
+
+  return {
+    id: previous?.id || crypto.randomUUID(),
+    profileId,
     startedAt,
     endedAt,
     durationSeconds,
     rewardIntervalMinutes: interval,
     rewardsEarned: rewards,
     creditedAfkSeconds: creditedSeconds,
+    totalAfkBefore: synchronized
+      ? previous?.totalAfkBefore || 0
+      : Math.floor(numberField(input.totalAfkBefore, "Total AFK avant")),
+    totalAfkAfter: synchronized
+      ? previous?.totalAfkAfter || 0
+      : Math.floor(numberField(input.totalAfkAfter, "Total AFK après")),
+    totalRewardsBefore: synchronized
+      ? previous?.totalRewardsBefore || 0
+      : Math.floor(numberField(input.totalRewardsBefore, "Récompenses avant")),
+    totalRewardsAfter: synchronized
+      ? previous?.totalRewardsAfter || 0
+      : Math.floor(numberField(input.totalRewardsAfter, "Récompenses après")),
     endReason: reason,
-    endLabel: textField(input.endLabel, previous.endLabel),
+    endLabel: textField(input.endLabel, previous?.endLabel || "Session ajoutée manuellement"),
+    createdAt: previous?.createdAt || now,
     updatedAt: now,
     source: "admin",
-  };
-  record.sessions[index] = updated;
+    synchronized,
+  } satisfies CompletedSession;
+}
+
+function rebuildRecord(record: ProfileRecord, now: number) {
   const rebuilt = rebuildDerived(record.base, record.sessions, record.adjustments, record.stats, now);
   record.sessions = rebuilt.sessions;
   record.stats = rebuilt.stats;
+}
+
+function updateSession(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  const sessionId = textField(input.sessionId, "");
+  const index = record.sessions.findIndex((session) => session.id === sessionId);
+  if (index < 0) throw new Error("Session introuvable");
+  const updated = sessionFromInput(profileId, input, now, record.sessions[index]);
+  record.sessions[index] = updated;
+  rebuildRecord(record, now);
   addLog(
     record,
     adminLog(profileId, "Session corrigée manuellement", textField(input.reason, `Session ${sessionId}`), now, sessionId),
   );
 }
 
+function createSession(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  const session = sessionFromInput(profileId, input, now);
+  record.sessions.push(session);
+  rebuildRecord(record, now);
+  addLog(
+    record,
+    adminLog(
+      profileId,
+      "Session créée manuellement",
+      textField(input.reason, `Session ${session.id}`),
+      now,
+      session.id,
+    ),
+  );
+}
+
+function deleteSession(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  const sessionId = textField(input.sessionId, "");
+  const index = record.sessions.findIndex((session) => session.id === sessionId);
+  if (index < 0) throw new Error("Session introuvable");
+  record.sessions.splice(index, 1);
+  rebuildRecord(record, now);
+  addLog(
+    record,
+    adminLog(
+      profileId,
+      "Session supprimée",
+      textField(input.reason, `Suppression de la session ${sessionId}`),
+      now,
+      sessionId,
+    ),
+  );
+}
+
+function mergeSessions(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  const requestedIds = Array.isArray(input.sessionIds)
+    ? [...new Set(input.sessionIds.filter((value): value is string => typeof value === "string" && value.length > 0))]
+    : [];
+  if (requestedIds.length < 2) throw new Error("Sélectionnez au moins deux sessions à fusionner");
+  const selected = record.sessions
+    .filter((session) => requestedIds.includes(session.id))
+    .sort((left, right) => left.startedAt - right.startedAt);
+  if (selected.length !== requestedIds.length) throw new Error("Une session sélectionnée est introuvable");
+
+  const startedAt = Math.min(...selected.map((session) => session.startedAt));
+  const endedAt = Math.max(...selected.map((session) => session.endedAt));
+  const interval = PROFILES[profileId].rewardIntervalMinutes;
+  const synced = synchronizedSessionValues(startedAt, endedAt, interval);
+  const lastSession = [...selected].sort((left, right) => right.endedAt - left.endedAt)[0];
+  const merged: CompletedSession = {
+    id: crypto.randomUUID(),
+    profileId,
+    startedAt,
+    endedAt,
+    durationSeconds: synced.durationSeconds,
+    rewardIntervalMinutes: interval,
+    rewardsEarned: synced.rewards,
+    creditedAfkSeconds: synced.creditedAfkSeconds,
+    totalAfkBefore: 0,
+    totalAfkAfter: 0,
+    totalRewardsBefore: 0,
+    totalRewardsAfter: 0,
+    endReason: lastSession.endReason,
+    endLabel: `Fusion de ${selected.length} sessions · ${lastSession.endLabel}`,
+    createdAt: Math.min(...selected.map((session) => session.createdAt)),
+    updatedAt: now,
+    source: "admin",
+    synchronized: true,
+  };
+  record.sessions = record.sessions.filter((session) => !requestedIds.includes(session.id));
+  record.sessions.push(merged);
+  rebuildRecord(record, now);
+  addLog(
+    record,
+    adminLog(
+      profileId,
+      `${selected.length} sessions fusionnées`,
+      textField(input.reason, "Fausse déconnexion corrigée · interruption incluse dans la durée"),
+      now,
+      merged.id,
+    ),
+  );
+}
+
+export function applyAdminActionToRecord(
+  record: ProfileRecord,
+  profileId: ProfileId,
+  body: Record<string, unknown>,
+  now = Date.now(),
+) {
+  const action = textField(body.action, "");
+  if (action === "update_totals") updateTotals(record, profileId, body, now);
+  else if (action === "update_base") updateBase(record, profileId, body, now);
+  else if (action === "update_session") updateSession(record, profileId, body, now);
+  else if (action === "create_session") createSession(record, profileId, body, now);
+  else if (action === "delete_session") deleteSession(record, profileId, body, now);
+  else if (action === "merge_sessions") mergeSessions(record, profileId, body, now);
+  else throw new Error("Action admin inconnue");
+  return record;
+}
+
 export async function adminAction(input: unknown) {
   if (!input || typeof input !== "object") throw new Error("Action admin invalide");
   const body = input as Record<string, unknown>;
   if (!isProfileId(body.profileId)) throw new Error("Profil invalide");
-  const action = textField(body.action, "");
   const lock = await acquireLock(TRACKER_LOCK_KEY);
   if (!lock) throw new Error("Une vérification est en cours, réessayez dans quelques secondes");
   try {
     const records = await loadAllRecords();
     const record = records[body.profileId];
     const now = Date.now();
-    if (action === "update_totals") updateTotals(record, body.profileId, body, now);
-    else if (action === "update_base") updateBase(record, body.profileId, body, now);
-    else if (action === "update_session") updateSession(record, body.profileId, body, now);
-    else throw new Error("Action admin inconnue");
+    applyAdminActionToRecord(record, body.profileId, body, now);
     records[body.profileId] = record;
     await saveAllRecords(records);
     return { ok: true, profile: statusFor(body.profileId, record, now) };

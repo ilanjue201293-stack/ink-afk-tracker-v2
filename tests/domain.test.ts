@@ -82,6 +82,7 @@ test("une édition de session recalcule les totaux avant et après", () => {
     createdAt: 1000,
     updatedAt: 1000,
     source: "admin",
+    synchronized: true,
   };
   const rebuilt = rebuildDerived(record.base, [session], [], record.stats, 2000);
   assert.equal(rebuilt.sessions[0].totalAfkBefore, 0);
@@ -89,6 +90,37 @@ test("une édition de session recalcule les totaux avant et après", () => {
   assert.equal(rebuilt.sessions[0].totalRewardsBefore, 0);
   assert.equal(rebuilt.sessions[0].totalRewardsAfter, 2);
   assert.equal(rebuilt.stats.creditedRewards, 2);
+});
+
+test("une session désynchronisée conserve ses totaux manuels", () => {
+  const record = createDefaultRecord("ilan");
+  const session: CompletedSession = {
+    id: "manual",
+    profileId: "ilan",
+    startedAt: 1000,
+    endedAt: 2000,
+    durationSeconds: 999,
+    rewardIntervalMinutes: 25,
+    rewardsEarned: 7,
+    creditedAfkSeconds: 1234,
+    totalAfkBefore: 111,
+    totalAfkAfter: 222,
+    totalRewardsBefore: 3,
+    totalRewardsAfter: 9,
+    endReason: "manual",
+    endLabel: "Exception manuelle",
+    createdAt: 1000,
+    updatedAt: 1000,
+    source: "admin",
+    synchronized: false,
+  };
+  const rebuilt = rebuildDerived(record.base, [session], [], record.stats, 2000);
+  assert.equal(rebuilt.sessions[0].totalAfkBefore, 111);
+  assert.equal(rebuilt.sessions[0].totalAfkAfter, 222);
+  assert.equal(rebuilt.sessions[0].totalRewardsBefore, 3);
+  assert.equal(rebuilt.sessions[0].totalRewardsAfter, 9);
+  assert.equal(rebuilt.stats.creditedAfkSeconds, 1234);
+  assert.equal(rebuilt.stats.creditedRewards, 7);
 });
 
 test("la configuration des profils reste indépendante", () => {

@@ -26,7 +26,17 @@ function log(
 
 function cloneRecord(record: ProfileRecord): ProfileRecord {
   return {
-    state: record.state ? { ...record.state, activeSession: record.state.activeSession ? { ...record.state.activeSession } : null } : null,
+    state: record.state
+      ? {
+          ...record.state,
+          activeSession: record.state.activeSession
+            ? {
+                ...record.state.activeSession,
+                pendingDisconnectAt: record.state.activeSession.pendingDisconnectAt ?? null,
+              }
+            : null,
+        }
+      : null,
     base: { ...record.base },
     stats: { ...record.stats },
     sessions: record.sessions.map((session) => ({ ...session })),
@@ -45,6 +55,7 @@ export function processProfilePresence(
   const previous = record.state;
   const effects: EngineEffect[] = [];
   let sessionTransition = false;
+  let presenceChangeHandled = false;
 
   const activeSession = previous?.activeSession ? { ...previous.activeSession } : null;
   const deltaSeconds = previous?.lastCheckedAt
@@ -86,6 +97,7 @@ export function processProfilePresence(
       id: crypto.randomUUID(),
       startedAt: now,
       observedSeconds: 0,
+      pendingDisconnectAt: null,
     };
     sessionTransition = true;
     addLog(
@@ -108,55 +120,94 @@ export function processProfilePresence(
       totalRewardsBefore: totals.totalRewards,
     });
   } else if (state.activeSession && previous) {
-    if (trustedDelta && previous.isAfkWorld) state.activeSession.observedSeconds += deltaSeconds;
-    if (!presence.isAfkWorld) {
-      const before = totalsFrom(record);
-      const credit = rewardCredit(state.activeSession.observedSeconds, config.rewardIntervalMinutes);
-      const session: CompletedSession = {
-        id: state.activeSession.id,
-        profileId: config.id,
-        startedAt: state.activeSession.startedAt,
-        endedAt: now,
-        durationSeconds: state.activeSession.observedSeconds,
-        rewardIntervalMinutes: config.rewardIntervalMinutes,
-        rewardsEarned: credit.rewards,
-        creditedAfkSeconds: credit.creditedAfkSeconds,
-        totalAfkBefore: before.totalAfkSeconds,
-        totalAfkAfter: before.totalAfkSeconds + credit.creditedAfkSeconds,
-        totalRewardsBefore: before.totalRewards,
-        totalRewardsAfter: before.totalRewards + credit.rewards,
-        endReason: endReason(presence),
-        endLabel: placeLabel(presence),
-        createdAt: now,
-        updatedAt: now,
-        source: "automatic",
-      };
-      record.sessions.push(session);
-      const rebuilt = rebuildDerived(record.base, record.sessions, record.adjustments, record.stats, now);
-      record.sessions = rebuilt.sessions;
-      record.stats = rebuilt.stats;
-      const storedSession = record.sessions.find((item) => item.id === session.id) || session;
-      state.activeSession = null;
-      sessionTransition = true;
+    const pendingDisconnectAt = state.activeSession.pendingDisconnectAt;
+
+    if (pendingDisconnectAt && presence.isAfkWorld) {
+      if (trustedDelta) state.activeSession.observedSeconds += deltaSeconds;
+      state.activeSession.pendingDisconnectAt = null;
+      presenceChangeHandled = true;
       addLog(
         record,
         log(
           config,
           now,
-          "session_ended",
-          "Session AFK terminée",
-          `${storedSession.endLabel} · ${Math.floor(storedSession.durationSeconds / 60)} min réelles · ${storedSession.rewardsEarned} récompense(s)`,
+          "presence_change",
+          "Déconnexion temporaire ignorée",
+          "Retour dans l’AFK World au scan suivant · session continuée",
           presence.placeId,
-          storedSession.id,
+          state.activeSession.id,
         ),
       );
-      effects.push({ type: "session_ended", profileId: config.id, session: storedSession });
+    } else {
+      if (trustedDelta && previous.isAfkWorld) state.activeSession.observedSeconds += deltaSeconds;
+
+      if (presence.presence === "Offline" && !pendingDisconnectAt) {
+        state.activeSession.pendingDisconnectAt = now;
+        presenceChangeHandled = true;
+        addLog(
+          record,
+          log(
+            config,
+            now,
+            "presence_change",
+            "Déconnexion à confirmer",
+            "La session reste ouverte jusqu’au prochain scan",
+            presence.placeId,
+            state.activeSession.id,
+          ),
+        );
+      } else if (!presence.isAfkWorld) {
+        const confirmedDisconnect = Boolean(pendingDisconnectAt);
+        const endedAt = pendingDisconnectAt || now;
+        const before = totalsFrom(record);
+        const credit = rewardCredit(state.activeSession.observedSeconds, config.rewardIntervalMinutes);
+        const session: CompletedSession = {
+          id: state.activeSession.id,
+          profileId: config.id,
+          startedAt: state.activeSession.startedAt,
+          endedAt,
+          durationSeconds: state.activeSession.observedSeconds,
+          rewardIntervalMinutes: config.rewardIntervalMinutes,
+          rewardsEarned: credit.rewards,
+          creditedAfkSeconds: credit.creditedAfkSeconds,
+          totalAfkBefore: before.totalAfkSeconds,
+          totalAfkAfter: before.totalAfkSeconds + credit.creditedAfkSeconds,
+          totalRewardsBefore: before.totalRewards,
+          totalRewardsAfter: before.totalRewards + credit.rewards,
+          endReason: confirmedDisconnect ? "offline" : endReason(presence),
+          endLabel: confirmedDisconnect ? "Offline confirmé au scan suivant" : placeLabel(presence),
+          createdAt: now,
+          updatedAt: now,
+          source: "automatic",
+          synchronized: true,
+        };
+        record.sessions.push(session);
+        const rebuilt = rebuildDerived(record.base, record.sessions, record.adjustments, record.stats, now);
+        record.sessions = rebuilt.sessions;
+        record.stats = rebuilt.stats;
+        const storedSession = record.sessions.find((item) => item.id === session.id) || session;
+        state.activeSession = null;
+        sessionTransition = true;
+        addLog(
+          record,
+          log(
+            config,
+            now,
+            "session_ended",
+            "Session AFK terminée",
+            `${storedSession.endLabel} · ${Math.floor(storedSession.durationSeconds / 60)} min réelles · ${storedSession.rewardsEarned} récompense(s)`,
+            presence.placeId,
+            storedSession.id,
+          ),
+        );
+        effects.push({ type: "session_ended", profileId: config.id, session: storedSession });
+      }
     }
   }
 
   const presenceChanged =
     previous && (previous.presenceType !== presence.presenceType || previous.placeId !== presence.placeId);
-  if (presenceChanged && !sessionTransition) {
+  if (presenceChanged && !sessionTransition && !presenceChangeHandled) {
     addLog(
       record,
       log(config, now, "presence_change", "Statut Roblox modifié", placeLabel(presence), presence.placeId),

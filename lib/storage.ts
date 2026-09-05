@@ -52,11 +52,26 @@ export async function loadAllRecords(): Promise<Record<ProfileId, ProfileRecord>
   let offset = 0;
   for (const profileId of PROFILE_ORDER) {
     const defaults = createDefaultRecord(profileId);
+    const storedState = parse<ProfileState | null>(values?.[offset] ?? null, defaults.state);
+    const storedSessions = parse<ProfileRecord["sessions"]>(values?.[offset + 3] ?? null, defaults.sessions);
     records[profileId] = {
-      state: parse<ProfileState | null>(values?.[offset] ?? null, defaults.state),
+      state: storedState
+        ? {
+            ...storedState,
+            activeSession: storedState.activeSession
+              ? {
+                  ...storedState.activeSession,
+                  pendingDisconnectAt: storedState.activeSession.pendingDisconnectAt ?? null,
+                }
+              : null,
+          }
+        : null,
       base: parse(values?.[offset + 1] ?? null, defaults.base),
       stats: parse(values?.[offset + 2] ?? null, defaults.stats),
-      sessions: parse(values?.[offset + 3] ?? null, defaults.sessions),
+      sessions: storedSessions.map((session) => ({
+        ...session,
+        synchronized: session.synchronized !== false,
+      })),
       adjustments: parse(values?.[offset + 4] ?? null, defaults.adjustments),
       logs: parse(values?.[offset + 5] ?? null, defaults.logs),
     };

@@ -34,18 +34,48 @@ function runMinutes(profileId: "ilan" | "ruben", minutes: number, exit: "offline
     record = processProfilePresence(config, record, presence(profileId, "afk", now), now).record;
   }
   const end = start + minutes * 60_000;
-  return processProfilePresence(config, record, presence(profileId, exit, end), end);
+  const firstExit = processProfilePresence(config, record, presence(profileId, exit, end), end);
+  if (exit === "offline") {
+    return processProfilePresence(config, firstExit.record, presence(profileId, "offline", end + 60_000), end + 60_000);
+  }
+  return firstExit;
 }
 
-test("AFK → offline ferme la session sans la nommer crash", () => {
+test("AFK → deux scans offline ferment la session sans la nommer crash", () => {
   const result = runMinutes("ilan", 26, "offline");
   assert.equal(result.record.state?.activeSession, null);
   assert.equal(result.record.sessions.length, 1);
+  assert.equal(result.record.sessions[0].endedAt, Date.UTC(2026, 8, 4, 12, 26, 0));
   assert.equal(result.record.sessions[0].durationSeconds, 26 * 60);
   assert.equal(result.record.sessions[0].rewardsEarned, 1);
   assert.equal(result.record.sessions[0].creditedAfkSeconds, 25 * 60);
   assert.equal(result.record.sessions[0].endReason, "offline");
   assert.equal(result.effects.at(-1)?.type, "session_ended");
+});
+
+test("un premier scan offline laisse la session en attente", () => {
+  const config = PROFILES.ilan;
+  const start = Date.UTC(2026, 8, 4, 12, 0, 0);
+  const record = processProfilePresence(config, createDefaultRecord("ilan"), presence("ilan", "afk", start), start).record;
+  const result = processProfilePresence(config, record, presence("ilan", "offline", start + 60_000), start + 60_000);
+  assert.ok(result.record.state?.activeSession);
+  assert.equal(result.record.state?.activeSession?.pendingDisconnectAt, start + 60_000);
+  assert.equal(result.record.sessions.length, 0);
+  assert.equal(result.effects.length, 0);
+});
+
+test("offline temporaire → AFK continue la même session et conserve le temps", () => {
+  const config = PROFILES.ilan;
+  const start = Date.UTC(2026, 8, 4, 12, 0, 0);
+  let record = processProfilePresence(config, createDefaultRecord("ilan"), presence("ilan", "afk", start), start).record;
+  record = processProfilePresence(config, record, presence("ilan", "offline", start + 60_000), start + 60_000).record;
+  const sessionId = record.state?.activeSession?.id;
+  const result = processProfilePresence(config, record, presence("ilan", "afk", start + 120_000), start + 120_000);
+  assert.equal(result.record.state?.activeSession?.id, sessionId);
+  assert.equal(result.record.state?.activeSession?.pendingDisconnectAt, null);
+  assert.equal(result.record.state?.activeSession?.observedSeconds, 120);
+  assert.equal(result.record.sessions.length, 0);
+  assert.equal(result.effects.length, 0);
 });
 
 test("AFK → autre jeu ferme aussi la session", () => {

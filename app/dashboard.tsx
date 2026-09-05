@@ -119,6 +119,10 @@ function endReasonLabel(reason: SessionEndReason) {
   return labels[reason];
 }
 
+function PencilButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return <button className="pencil-button" type="button" aria-label={label} title={label} onClick={onClick}>✎</button>;
+}
+
 type SessionDraft = {
   startedAt: string;
   endedAt: string;
@@ -129,6 +133,11 @@ type SessionDraft = {
   endReason: SessionEndReason;
   endLabel: string;
   reason: string;
+  synchronized: boolean;
+  totalAfkBefore: number;
+  totalAfkAfter: number;
+  totalRewardsBefore: number;
+  totalRewardsAfter: number;
 };
 
 function sessionDraft(session: CompletedSession): SessionDraft {
@@ -142,39 +151,84 @@ function sessionDraft(session: CompletedSession): SessionDraft {
     endReason: session.endReason,
     endLabel: session.endLabel,
     reason: "Correction de session",
+    synchronized: session.synchronized !== false,
+    totalAfkBefore: session.totalAfkBefore,
+    totalAfkAfter: session.totalAfkAfter,
+    totalRewardsBefore: session.totalRewardsBefore,
+    totalRewardsAfter: session.totalRewardsAfter,
   };
+}
+
+function newSessionDraft(intervalMinutes: number, totalAfkSeconds: number, totalRewards: number): SessionDraft {
+  const endedAt = Date.now();
+  const durationSeconds = intervalMinutes * 60;
+  return {
+    startedAt: dateInput(endedAt - durationSeconds * 1000),
+    endedAt: dateInput(endedAt),
+    durationSeconds,
+    rewardIntervalMinutes: intervalMinutes,
+    rewardsEarned: 1,
+    creditedMinutes: intervalMinutes,
+    endReason: "manual",
+    endLabel: "Session ajoutée manuellement",
+    reason: "Ajout manuel d’une session",
+    synchronized: true,
+    totalAfkBefore: totalAfkSeconds,
+    totalAfkAfter: totalAfkSeconds + durationSeconds,
+    totalRewardsBefore: totalRewards,
+    totalRewardsAfter: totalRewards + 1,
+  };
+}
+
+function DetailCell({ label, value, admin, onEdit }: { label: string; value: React.ReactNode; admin: boolean; onEdit: () => void }) {
+  return (
+    <div className="detail-cell">
+      <span>{label}</span>
+      <div className="detail-value"><b>{value}</b>{admin && <PencilButton label={`Modifier ${label}`} onClick={onEdit} />}</div>
+    </div>
+  );
 }
 
 function SessionModal({
   session,
   admin,
+  initialDraft,
   onClose,
   onSave,
+  onDelete,
 }: {
-  session: CompletedSession;
+  session: CompletedSession | null;
   admin: boolean;
+  initialDraft?: SessionDraft;
   onClose: () => void;
   onSave: (draft: SessionDraft) => Promise<void>;
+  onDelete?: () => Promise<void>;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(() => sessionDraft(session));
+  const creating = session === null;
+  const [editing, setEditing] = useState(creating);
+  const [draft, setDraft] = useState(() => initialDraft || sessionDraft(session as CompletedSession));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  function syncDates(startedAt: string, endedAt: string) {
-    const start = new Date(startedAt).getTime();
-    const end = new Date(endedAt).getTime();
-    const durationSeconds = Number.isFinite(start) && Number.isFinite(end)
-      ? Math.max(0, Math.floor((end - start) / 1000))
-      : draft.durationSeconds;
-    const rewards = Math.floor(durationSeconds / (draft.rewardIntervalMinutes * 60));
-    setDraft({
-      ...draft,
-      startedAt,
-      endedAt,
-      durationSeconds,
-      rewardsEarned: rewards,
-      creditedMinutes: rewards * draft.rewardIntervalMinutes,
+  function changeDraft(patch: Partial<SessionDraft>, source: "dates" | "duration" | "other" = "other") {
+    setDraft((current) => {
+      const next = { ...current, ...patch };
+      if (!next.synchronized) return next;
+      const start = new Date(next.startedAt).getTime();
+      let end = new Date(next.endedAt).getTime();
+      if (source === "duration" && Number.isFinite(start)) {
+        end = start + Math.max(0, next.durationSeconds) * 1000;
+        next.endedAt = dateInput(end);
+      } else if (Number.isFinite(start) && Number.isFinite(end)) {
+        next.durationSeconds = Math.max(0, Math.floor((end - start) / 1000));
+      }
+      const interval = Math.max(1, next.rewardIntervalMinutes);
+      next.rewardIntervalMinutes = interval;
+      next.rewardsEarned = Math.floor(next.durationSeconds / (interval * 60));
+      next.creditedMinutes = next.rewardsEarned * interval;
+      next.totalAfkAfter = next.totalAfkBefore + next.creditedMinutes * 60;
+      next.totalRewardsAfter = next.totalRewardsBefore + next.rewardsEarned;
+      return next;
     });
   }
 
@@ -191,68 +245,82 @@ function SessionModal({
     }
   }
 
+  async function remove() {
+    if (!onDelete || !window.confirm("Supprimer définitivement cette session ? Les totaux seront recalculés.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onDelete();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur");
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal card" role="dialog" aria-modal="true" aria-label="Détail de la session" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <div><span className="eyebrow">SESSION</span><h2>Détail complet</h2></div>
+          <div><span className="eyebrow">SESSION</span><h2>{creating ? "Créer une session" : "Détail complet"}</h2></div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Fermer">×</button>
         </div>
 
-        {!editing ? (
+        {!editing && session ? (
           <div className="session-detail-grid">
-            <div><span>Début</span><b>{dateTime(session.startedAt)}</b></div>
-            <div><span>Fin</span><b>{dateTime(session.endedAt)}</b></div>
-            <div><span>Durée réelle</span><b>{exactDuration(session.durationSeconds)}</b></div>
-            <div><span>Temps crédité</span><b>{hoursMinutes(session.creditedAfkSeconds)}</b></div>
-            <div><span>Récompenses gagnées</span><b>{session.rewardsEarned}</b></div>
-            <div><span>Intervalle</span><b>{session.rewardIntervalMinutes} min</b></div>
-            <div><span>Total AFK avant</span><b>{hoursMinutes(session.totalAfkBefore)}</b></div>
-            <div><span>Total AFK après</span><b>{hoursMinutes(session.totalAfkAfter)}</b></div>
-            <div><span>Récompenses avant</span><b>{session.totalRewardsBefore}</b></div>
-            <div><span>Récompenses après</span><b>{session.totalRewardsAfter}</b></div>
-            <div><span>Fin / raison</span><b>{endReasonLabel(session.endReason)} · {session.endLabel}</b></div>
-            <div><span>Source</span><b>{session.source === "admin" ? "Modifiée manuellement" : "Automatique"}</b></div>
+            <DetailCell label="Début" value={dateTime(session.startedAt)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Fin" value={dateTime(session.endedAt)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Durée réelle" value={exactDuration(session.durationSeconds)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Temps crédité" value={hoursMinutes(session.creditedAfkSeconds)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Récompenses gagnées" value={session.rewardsEarned} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Intervalle" value={`${session.rewardIntervalMinutes} min`} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Total AFK avant" value={hoursMinutes(session.totalAfkBefore)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Total AFK après" value={hoursMinutes(session.totalAfkAfter)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Récompenses avant" value={session.totalRewardsBefore} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Récompenses après" value={session.totalRewardsAfter} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Fin / raison" value={`${endReasonLabel(session.endReason)} · ${session.endLabel}`} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Synchronisation" value={session.synchronized === false ? "Désynchronisée" : "Automatique"} admin={admin} onEdit={() => setEditing(true)} />
+            <div className="detail-cell"><span>Source</span><b>{session.source === "admin" ? "Modifiée manuellement" : "Automatique"}</b></div>
           </div>
         ) : (
           <div className="admin-form session-edit-form">
-            <label>Début<input type="datetime-local" step="1" value={draft.startedAt} onChange={(event) => syncDates(event.target.value, draft.endedAt)} /></label>
-            <label>Fin<input type="datetime-local" step="1" value={draft.endedAt} onChange={(event) => syncDates(draft.startedAt, event.target.value)} /></label>
+            <label className="wide sync-toggle"><span><input type="checkbox" checked={!draft.synchronized} onChange={(event) => changeDraft({ synchronized: !event.target.checked }, "dates")} /> Désynchroniser les changements</span><small>Décoché : durée, récompenses, crédits et totaux suivent automatiquement.</small></label>
+            <label>Début<input type="datetime-local" step="1" value={draft.startedAt} onChange={(event) => changeDraft({ startedAt: event.target.value }, "dates")} /></label>
+            <label>Fin<input type="datetime-local" step="1" value={draft.endedAt} onChange={(event) => changeDraft({ endedAt: event.target.value }, "dates")} /></label>
             <label>Durée réelle (secondes)<input type="number" min="0" value={draft.durationSeconds} onChange={(event) => {
               const durationSeconds = Math.max(0, Number(event.target.value));
-              const start = new Date(draft.startedAt).getTime();
-              const rewards = Math.floor(durationSeconds / (draft.rewardIntervalMinutes * 60));
-              setDraft({ ...draft, durationSeconds, endedAt: dateInput(start + durationSeconds * 1000), rewardsEarned: rewards, creditedMinutes: rewards * draft.rewardIntervalMinutes });
+              changeDraft({ durationSeconds }, "duration");
             }} /></label>
             <label>Intervalle (minutes)<input type="number" min="1" value={draft.rewardIntervalMinutes} onChange={(event) => {
               const interval = Math.max(1, Number(event.target.value));
-              const rewards = Math.floor(draft.durationSeconds / (interval * 60));
-              setDraft({ ...draft, rewardIntervalMinutes: interval, rewardsEarned: rewards, creditedMinutes: rewards * interval });
+              changeDraft({ rewardIntervalMinutes: interval });
             }} /></label>
-            <label>Récompenses<input type="number" min="0" value={draft.rewardsEarned} onChange={(event) => {
+            <label>Récompenses<input type="number" min="0" disabled={draft.synchronized} value={draft.rewardsEarned} onChange={(event) => {
               const rewards = Math.max(0, Math.floor(Number(event.target.value)));
-              setDraft({ ...draft, rewardsEarned: rewards, creditedMinutes: rewards * draft.rewardIntervalMinutes });
+              changeDraft({ rewardsEarned: rewards });
             }} /></label>
-            <label>Temps crédité (minutes)<input type="number" min="0" step={draft.rewardIntervalMinutes} value={draft.creditedMinutes} onChange={(event) => {
-              const requested = Math.max(0, Number(event.target.value));
-              const rewards = Math.floor(requested / draft.rewardIntervalMinutes);
-              setDraft({ ...draft, rewardsEarned: rewards, creditedMinutes: rewards * draft.rewardIntervalMinutes });
-            }} /></label>
-            <label>Type de fin<select value={draft.endReason} onChange={(event) => setDraft({ ...draft, endReason: event.target.value as SessionEndReason })}>
+            <label>Temps crédité (minutes)<input type="number" min="0" disabled={draft.synchronized} value={draft.creditedMinutes} onChange={(event) => changeDraft({ creditedMinutes: Math.max(0, Number(event.target.value)) })} /></label>
+            <label>Type de fin<select value={draft.endReason} onChange={(event) => changeDraft({ endReason: event.target.value as SessionEndReason })}>
               <option value="offline">Offline</option><option value="ink_game">Ink Game</option><option value="other_game">Autre jeu</option>
               <option value="online">En ligne</option><option value="studio">Roblox Studio</option><option value="invisible">Invisible</option>
               <option value="unknown">Inconnu</option><option value="manual">Manuel</option>
             </select></label>
-            <label>Libellé de fin<input value={draft.endLabel} onChange={(event) => setDraft({ ...draft, endLabel: event.target.value })} /></label>
-            <label className="wide">Motif de correction<input value={draft.reason} onChange={(event) => setDraft({ ...draft, reason: event.target.value })} /></label>
+            <label>Libellé de fin<input value={draft.endLabel} onChange={(event) => changeDraft({ endLabel: event.target.value })} /></label>
+            {!draft.synchronized && <>
+              <label>Total AFK avant (secondes)<input type="number" min="0" value={draft.totalAfkBefore} onChange={(event) => changeDraft({ totalAfkBefore: Math.max(0, Number(event.target.value)) })} /></label>
+              <label>Total AFK après (secondes)<input type="number" min="0" value={draft.totalAfkAfter} onChange={(event) => changeDraft({ totalAfkAfter: Math.max(0, Number(event.target.value)) })} /></label>
+              <label>Récompenses avant<input type="number" min="0" value={draft.totalRewardsBefore} onChange={(event) => changeDraft({ totalRewardsBefore: Math.max(0, Number(event.target.value)) })} /></label>
+              <label>Récompenses après<input type="number" min="0" value={draft.totalRewardsAfter} onChange={(event) => changeDraft({ totalRewardsAfter: Math.max(0, Number(event.target.value)) })} /></label>
+            </>}
+            <label className="wide">Motif de correction<input value={draft.reason} onChange={(event) => changeDraft({ reason: event.target.value })} /></label>
           </div>
         )}
 
         {error && <div className="error compact">{error}</div>}
         <div className="modal-actions">
+          {admin && !creating && !editing && onDelete && <button className="button danger" type="button" disabled={busy} onClick={remove}>Supprimer</button>}
           {admin && !editing && <button className="button secondary" type="button" onClick={() => setEditing(true)}>Modifier la session</button>}
-          {editing && <button className="button secondary" type="button" onClick={() => setEditing(false)}>Annuler</button>}
-          {editing && <button className="button" type="button" disabled={busy} onClick={save}>{busy ? "Enregistrement…" : "Enregistrer"}</button>}
+          {editing && <button className="button secondary" type="button" onClick={creating ? onClose : () => setEditing(false)}>Annuler</button>}
+          {editing && <button className="button" type="button" disabled={busy} onClick={save}>{busy ? "Enregistrement…" : creating ? "Créer la session" : "Enregistrer"}</button>}
           {!editing && <button className="button" type="button" onClick={onClose}>Fermer</button>}
         </div>
       </section>
@@ -328,6 +396,8 @@ export default function Dashboard() {
   const [profileId, setProfileId] = useState<ProfileId>("ilan");
   const [sessions, setSessions] = useState<Record<ProfileId, CompletedSession[]>>({ ilan: [], ruben: [], naim: [] });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [showCreateSession, setShowCreateSession] = useState(false);
   const [selectedDay, setSelectedDay] = useState(INITIAL_PARIS_DATE);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -383,6 +453,7 @@ export default function Dashboard() {
     () => profileSessions.find((session) => session.id === selectedSessionId) || null,
     [profileSessions, selectedSessionId],
   );
+  const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds]);
   const selectedDaySessions = useMemo(
     () => profileSessions.filter((session) => parisDateKey(session.startedAt) === selectedDay),
     [profileSessions, selectedDay],
@@ -414,12 +485,31 @@ export default function Dashboard() {
     setShowAdminPanel(false);
   }
 
-  async function postAdmin(body: Record<string, unknown>) {
+  async function postAdmin(body: Record<string, unknown>, successMessage = "Modification enregistrée et totaux recalculés.") {
     const response = await fetch("/api/admin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, profileId }) });
     const json = await response.json();
     if (!response.ok) throw new Error(json.error || "Modification refusée");
     await Promise.all([loadStatus(), loadSessions(profileId)]);
-    setNotice("Modification enregistrée et totaux recalculés.");
+    setNotice(successMessage);
+  }
+
+  function sessionPayload(draft: SessionDraft) {
+    return {
+      startedAt: new Date(draft.startedAt).getTime(),
+      endedAt: new Date(draft.endedAt).getTime(),
+      durationSeconds: draft.durationSeconds,
+      rewardIntervalMinutes: draft.rewardIntervalMinutes,
+      rewardsEarned: draft.rewardsEarned,
+      creditedAfkSeconds: draft.creditedMinutes * 60,
+      totalAfkBefore: draft.totalAfkBefore,
+      totalAfkAfter: draft.totalAfkAfter,
+      totalRewardsBefore: draft.totalRewardsBefore,
+      totalRewardsAfter: draft.totalRewardsAfter,
+      endReason: draft.endReason,
+      endLabel: draft.endLabel,
+      reason: draft.reason,
+      synchronized: draft.synchronized,
+    };
   }
 
   async function saveSession(draft: SessionDraft) {
@@ -427,17 +517,54 @@ export default function Dashboard() {
     await postAdmin({
       action: "update_session",
       sessionId: selectedSession.id,
-      startedAt: new Date(draft.startedAt).getTime(),
-      endedAt: new Date(draft.endedAt).getTime(),
-      durationSeconds: draft.durationSeconds,
-      rewardIntervalMinutes: draft.rewardIntervalMinutes,
-      rewardsEarned: draft.rewardsEarned,
-      creditedAfkSeconds: draft.creditedMinutes * 60,
-      endReason: draft.endReason,
-      endLabel: draft.endLabel,
-      reason: draft.reason,
-    });
+      ...sessionPayload(draft),
+    }, "Session modifiée et données liées recalculées.");
     setSelectedSessionId(null);
+  }
+
+  async function createSession(draft: SessionDraft) {
+    await postAdmin({ action: "create_session", ...sessionPayload(draft) }, "Session créée et ajoutée aux totaux.");
+    setShowCreateSession(false);
+  }
+
+  async function deleteSelectedSession() {
+    if (!selectedSession) return;
+    await postAdmin(
+      { action: "delete_session", sessionId: selectedSession.id, reason: "Suppression manuelle depuis le dashboard" },
+      "Session supprimée et totaux recalculés.",
+    );
+    setSelectedSessionId(null);
+    setSelectedSessionIds((current) => current.filter((id) => id !== selectedSession.id));
+  }
+
+  function toggleSessionSelection(sessionId: string) {
+    setSelectedSessionIds((current) => current.includes(sessionId)
+      ? current.filter((id) => id !== sessionId)
+      : [...current, sessionId]);
+  }
+
+  async function mergeSelectedSessions() {
+    if (selectedSessionIds.length < 2) return;
+    const confirmed = window.confirm(
+      `Fusionner ${selectedSessionIds.length} sessions ? La durée couvrira tout le temps entre le premier début et la dernière fin, interruptions comprises.`,
+    );
+    if (!confirmed) return;
+    setAdminBusy(true);
+    try {
+      await postAdmin(
+        {
+          action: "merge_sessions",
+          sessionIds: selectedSessionIds,
+          reason: "Fausse déconnexion corrigée depuis le dashboard",
+        },
+        `${selectedSessionIds.length} sessions fusionnées et totaux recalculés.`,
+      );
+      setSelectedSessionIds([]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur de fusion");
+    } finally {
+      setAdminBusy(false);
+    }
   }
 
   return (
@@ -454,17 +581,19 @@ export default function Dashboard() {
       </header>
 
       <nav className="profile-tabs" aria-label="Profils">
-        {PROFILE_IDS.map((id) => <button key={id} type="button" className={id === profileId ? "active" : ""} onClick={() => { setProfileId(id); setSelectedSessionId(null); }}>{PROFILE_NAMES[id]}</button>)}
+        {PROFILE_IDS.map((id) => <button key={id} type="button" className={id === profileId ? "active" : ""} onClick={() => { setProfileId(id); setSelectedSessionId(null); setSelectedSessionIds([]); setShowCreateSession(false); }}>{PROFILE_NAMES[id]}</button>)}
       </nav>
 
       {error && <div className="error">{error}</div>}
       {notice && <div className="notice" onClick={() => setNotice("")}>{notice}</div>}
       {profile?.live.stale && <div className="warning">⚠️ Le tracker n’a pas reçu de vérification récente. Les compteurs live sont temporairement figés.</div>}
+      {profile?.live.disconnectPending && <div className="warning">⏳ Déconnexion détectée une fois : la session reste ouverte en attendant le prochain scan.</div>}
       {privacyProblem && <div className="warning">⚠️ Roblox indique que ce compte joue mais masque le Place ID. Activez la visibilité de l’expérience actuelle dans Roblox.</div>}
 
       {admin && showAdminPanel && profile && (
-        <section className="card admin-panel">
+        <section className="card admin-panel" key={`${profileId}-${profile.totals.totalAfkSeconds}-${profile.totals.totalRewards}-${profile.totals.baseAfkSeconds}-${profile.totals.baseRewards}`}>
           <div className="section-title"><div><span className="eyebrow">ADMINISTRATION</span><h2>{profile.config.displayName}</h2></div><button className="text-button" type="button" onClick={logout}>Déconnexion</button></div>
+          <p className="admin-help">Les crayons ouvrent les données modifiables. Les valeurs liées sont recalculées automatiquement, sauf pour une session volontairement désynchronisée.</p>
           <div className="admin-columns">
             <form className="admin-form" onSubmit={async (event) => {
               event.preventDefault(); const form = new FormData(event.currentTarget); setAdminBusy(true);
@@ -498,9 +627,9 @@ export default function Dashboard() {
       </section>
 
       <section className="grid stats-grid">
-        <article className="card stat primary"><span className="muted">AFK total cumulé</span><strong>{profile ? hoursMinutes(profile.totals.totalAfkSeconds) : "—"}</strong><small>{profile ? `≈ ${daysHoursMinutes(profile.totals.totalAfkSeconds)}` : "—"}</small></article>
-        <article className="card stat"><span className="muted">Récompenses estimées</span><strong>{profile?.totals.totalRewards ?? "—"}</strong><small>{profile ? `1 récompense par session, tous les ${profile.config.rewardIntervalMinutes} min complets` : "—"}</small></article>
-        <article className="card stat status-stat"><span className="muted">Sessions aujourd’hui</span><strong>{profile?.sessionsToday ?? "—"}</strong><small>depuis 00:00 · heure Europe/Paris</small></article>
+        <article className="card stat primary">{admin && <PencilButton label="Modifier le temps AFK total" onClick={() => setShowAdminPanel(true)} />}<span className="muted">AFK total cumulé</span><strong>{profile ? hoursMinutes(profile.totals.totalAfkSeconds) : "—"}</strong><small>{profile ? `≈ ${daysHoursMinutes(profile.totals.totalAfkSeconds)}` : "—"}</small></article>
+        <article className="card stat">{admin && <PencilButton label="Modifier les récompenses totales" onClick={() => setShowAdminPanel(true)} />}<span className="muted">Récompenses estimées</span><strong>{profile?.totals.totalRewards ?? "—"}</strong><small>{profile ? `1 récompense par session, tous les ${profile.config.rewardIntervalMinutes} min complets` : "—"}</small></article>
+        <article className="card stat status-stat">{admin && <PencilButton label="Créer une session" onClick={() => setShowCreateSession(true)} />}<span className="muted">Sessions aujourd’hui</span><strong>{profile?.sessionsToday ?? "—"}</strong><small>depuis 00:00 · heure Europe/Paris</small></article>
       </section>
 
       <section className="grid target-grid">
@@ -542,14 +671,20 @@ export default function Dashboard() {
         </article>
         <article className="card sessions-card">
           <div className="section-title"><div><span className="eyebrow">HISTORIQUE</span><h2>Sessions</h2></div><span className="muted">{profileSessions.length} au total</span></div>
-          {profileSessions.length === 0 ? <div className="empty">Aucune session terminée pour ce profil.</div> : <div className="session-list">{profileSessions.map((session) => <button type="button" key={session.id} onClick={() => setSelectedSessionId(session.id)}><span><b>{dateTime(session.startedAt)}</b><small>{session.endLabel}</small></span><span className="session-metrics"><b>{exactDuration(session.durationSeconds)}</b><small>{session.rewardsEarned} récompense(s) · {hoursMinutes(session.creditedAfkSeconds)} créditées</small></span></button>)}</div>}
+          {admin && <div className="session-admin-toolbar">
+            <button className="button" type="button" onClick={() => setShowCreateSession(true)}>+ Nouvelle session</button>
+            <button className="button secondary" type="button" disabled={adminBusy || selectedSessionIds.length < 2} onClick={mergeSelectedSessions}>Fusionner ({selectedSessionIds.length})</button>
+            <small>Sélectionne plusieurs sessions pour réunir une fausse coupure, interruption comprise.</small>
+          </div>}
+          {profileSessions.length === 0 ? <div className="empty">Aucune session terminée pour ce profil.</div> : <div className="session-list">{profileSessions.map((session) => <div className="session-row" key={session.id}>{admin && <label className="session-select" title="Sélectionner pour fusionner"><input type="checkbox" checked={selectedSessionIdSet.has(session.id)} onChange={() => toggleSessionSelection(session.id)} /><span /></label>}<button type="button" onClick={() => setSelectedSessionId(session.id)}><span><b>{dateTime(session.startedAt)}</b><small>{session.endLabel}{session.synchronized === false ? " · désynchronisée" : ""}</small></span><span className="session-metrics"><b>{exactDuration(session.durationSeconds)}</b><small>{session.rewardsEarned} récompense(s) · {hoursMinutes(session.creditedAfkSeconds)} créditées</small></span>{admin && <span className="row-pencil" aria-hidden="true">✎</span>}</button></div>)}</div>}
         </article>
       </section>
 
       <footer><span>Le site se met à jour toutes les 10 s · les trois comptes sont vérifiés dans une requête batch.</span><span>Les objectifs 714 / 2500 sont des moyennes statistiques, jamais des garanties.</span></footer>
 
       {showLogin && <div className="modal-backdrop" onMouseDown={() => setShowLogin(false)}><form className="modal login-modal card" onSubmit={login} onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">ADMINISTRATION</span><h2>Connexion</h2></div><button className="icon-button" type="button" onClick={() => setShowLogin(false)}>×</button></div><label className="secret-label">Secret admin<input type="password" autoComplete="current-password" value={secret} onChange={(event) => setSecret(event.target.value)} autoFocus /></label><button className="button" disabled={adminBusy}>{adminBusy ? "Vérification…" : "Se connecter"}</button></form></div>}
-      {selectedSession && <SessionModal key={`${selectedSession.id}-${selectedSession.updatedAt}`} session={selectedSession} admin={admin} onClose={() => setSelectedSessionId(null)} onSave={saveSession} />}
+      {selectedSession && <SessionModal key={`${selectedSession.id}-${selectedSession.updatedAt}`} session={selectedSession} admin={admin} onClose={() => setSelectedSessionId(null)} onSave={saveSession} onDelete={deleteSelectedSession} />}
+      {showCreateSession && profile && <SessionModal key={`new-${profileId}`} session={null} admin={admin} initialDraft={newSessionDraft(profile.config.rewardIntervalMinutes, profile.totals.totalAfkSeconds, profile.totals.totalRewards)} onClose={() => setShowCreateSession(false)} onSave={createSession} />}
     </main>
   );
 }

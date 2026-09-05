@@ -20,6 +20,11 @@ export function rewardCredit(durationSeconds: number, intervalMinutes: number) {
   return { rewards, creditedAfkSeconds: rewards * intervalSeconds };
 }
 
+export function synchronizedSessionValues(startedAt: number, endedAt: number, intervalMinutes: number) {
+  const durationSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  return { durationSeconds, ...rewardCredit(durationSeconds, intervalMinutes) };
+}
+
 export function cumulativeChance(rate: number, rewards: number) {
   return 1 - Math.pow(1 - rate, Math.max(0, Math.floor(rewards)));
 }
@@ -88,12 +93,16 @@ export function rebuildDerived(
       continue;
     }
     const session = entry.session;
-    session.totalAfkBefore = runningAfk;
-    session.totalRewardsBefore = runningRewards;
+    if (session.synchronized !== false) {
+      session.totalAfkBefore = runningAfk;
+      session.totalRewardsBefore = runningRewards;
+    }
     runningAfk = Math.max(0, runningAfk + session.creditedAfkSeconds);
     runningRewards = Math.max(0, runningRewards + session.rewardsEarned);
-    session.totalAfkAfter = runningAfk;
-    session.totalRewardsAfter = runningRewards;
+    if (session.synchronized !== false) {
+      session.totalAfkAfter = runningAfk;
+      session.totalRewardsAfter = runningRewards;
+    }
   }
 
   const sortedSessions = sessionCopies.sort((a, b) => b.startedAt - a.startedAt);

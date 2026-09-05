@@ -35,6 +35,7 @@ test("le message de fin contient tous les avant/après demandés", () => {
     createdAt: 1000,
     updatedAt: 1000,
     source: "automatic",
+    synchronized: true,
   };
   const payload = buildSessionEndPayload(session);
   assert.equal(payload.embeds[0].title, "⏹️ Fin de session AFK");
