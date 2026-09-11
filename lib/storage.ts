@@ -4,8 +4,8 @@ import type { ProfileId, ProfileRecord, ProfileState, TrackerLog } from "./types
 
 export const TRACKER_LOCK_KEY = "ink:v2:check-lock";
 
-type RecordPart = "state" | "base" | "stats" | "sessions" | "adjustments" | "logs";
-const PARTS: RecordPart[] = ["state", "base", "stats", "sessions", "adjustments", "logs"];
+type RecordPart = "state" | "base" | "stats" | "sessions" | "adjustments" | "logs" | "achievements";
+const PARTS: RecordPart[] = ["state", "base", "stats", "sessions", "adjustments", "logs", "achievements"];
 
 function key(profileId: ProfileId, part: RecordPart) {
   return `ink:v2:profiles:${profileId}:${part}`;
@@ -33,6 +33,11 @@ export function createDefaultRecord(profileId: ProfileId): ProfileRecord {
     sessions: [],
     adjustments: [],
     logs: [],
+    achievements: {
+      title: null,
+      ultra_instinct: null,
+      rumor: null,
+    },
   };
 }
 
@@ -54,6 +59,10 @@ export async function loadAllRecords(): Promise<Record<ProfileId, ProfileRecord>
     const defaults = createDefaultRecord(profileId);
     const storedState = parse<ProfileState | null>(values?.[offset] ?? null, defaults.state);
     const storedSessions = parse<ProfileRecord["sessions"]>(values?.[offset + 3] ?? null, defaults.sessions);
+    const storedAchievements = parse<Partial<ProfileRecord["achievements"]>>(
+      values?.[offset + 6] ?? null,
+      defaults.achievements,
+    );
     records[profileId] = {
       state: storedState
         ? {
@@ -74,6 +83,10 @@ export async function loadAllRecords(): Promise<Record<ProfileId, ProfileRecord>
       })),
       adjustments: parse(values?.[offset + 4] ?? null, defaults.adjustments),
       logs: parse(values?.[offset + 5] ?? null, defaults.logs),
+      achievements: {
+        ...defaults.achievements,
+        ...storedAchievements,
+      },
     };
     offset += PARTS.length;
   }
