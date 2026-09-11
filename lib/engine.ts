@@ -42,6 +42,11 @@ function cloneRecord(record: ProfileRecord): ProfileRecord {
     sessions: record.sessions.map((session) => ({ ...session })),
     adjustments: record.adjustments.map((adjustment) => ({ ...adjustment })),
     logs: record.logs.map((item) => ({ ...item })),
+    achievements: {
+      title: record.achievements.title ? { ...record.achievements.title } : null,
+      ultra_instinct: record.achievements.ultra_instinct ? { ...record.achievements.ultra_instinct } : null,
+      rumor: record.achievements.rumor ? { ...record.achievements.rumor } : null,
+    },
   };
 }
 
