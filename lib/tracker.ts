@@ -18,6 +18,7 @@ import { acquireLock, releaseLock } from "./redis";
 import { getPresences } from "./roblox";
 import { TRACKER_LOCK_KEY, addLog, loadAllRecords, saveAllRecords } from "./storage";
 import type {
+  AchievementId,
   CompletedSession,
   ManualAdjustment,
   ProfileId,
@@ -42,6 +43,7 @@ function statusFor(profileId: ProfileId, record: ProfileRecord, now: number): Pr
     state: record.state,
     stats: record.stats,
     logs: record.logs.slice(0, 50),
+    achievements: record.achievements,
     totals: {
       ...totals,
       baseAfkSeconds: record.base.afkSeconds,
@@ -331,6 +333,42 @@ function mergeSessions(record: ProfileRecord, profileId: ProfileId, input: Recor
   );
 }
 
+const ACHIEVEMENT_LABELS: Record<AchievementId, string> = {
+  title: "Titre",
+  ultra_instinct: "Ultra Instinct",
+  rumor: "Rumor",
+};
+
+function confirmAchievement(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  if (typeof input.achievementId !== "string" || !(input.achievementId in ACHIEVEMENT_LABELS)) {
+    throw new Error("Récompense invalide");
+  }
+  const achievementId = input.achievementId as AchievementId;
+  const label = ACHIEVEMENT_LABELS[achievementId];
+  if (record.achievements[achievementId]) throw new Error(`${label} est déjà confirmé comme obtenu`);
+
+  const totals = totalsFrom(record);
+  record.achievements[achievementId] = {
+    id: achievementId,
+    obtainedAt: now,
+    totalRewardsAt: totals.totalRewards,
+    totalAfkSecondsAt: totals.totalAfkSeconds,
+  };
+
+  const totalMinutes = Math.floor(totals.totalAfkSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  addLog(
+    record,
+    adminLog(
+      profileId,
+      `${label} obtenu`,
+      `Confirmé à ${totals.totalRewards} récompenses · ${hours}h ${String(minutes).padStart(2, "0")}m AFK`,
+      now,
+    ),
+  );
+}
+
 export function applyAdminActionToRecord(
   record: ProfileRecord,
   profileId: ProfileId,
@@ -344,6 +382,7 @@ export function applyAdminActionToRecord(
   else if (action === "create_session") createSession(record, profileId, body, now);
   else if (action === "delete_session") deleteSession(record, profileId, body, now);
   else if (action === "merge_sessions") mergeSessions(record, profileId, body, now);
+  else if (action === "confirm_achievement") confirmAchievement(record, profileId, body, now);
   else throw new Error("Action admin inconnue");
   return record;
 }
