@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CompletedSession, ProfileId, ProfileStatus, SessionEndReason } from "@/lib/types";
+import type { AchievementId, AchievementRecord, CompletedSession, ProfileId, ProfileStatus, SessionEndReason } from "@/lib/types";
 
 type DashboardResponse = {
   checkedAt: number;
@@ -61,6 +61,11 @@ function dateTime(timestamp: number) {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(timestamp));
+}
+
+function achievementText(achievement: AchievementRecord | null | undefined) {
+  if (!achievement) return "Pas encore confirmé";
+  return `✅ Obtenu le ${dateTime(achievement.obtainedAt)} · ${achievement.totalRewardsAt} récompense(s) · ${hoursMinutes(achievement.totalAfkSecondsAt)} AFK`;
 }
 
 function parisDateKey(timestamp: number) {
@@ -567,6 +572,23 @@ export default function Dashboard() {
     }
   }
 
+  async function confirmAchievement(achievementId: AchievementId, label: string) {
+    if (!admin || !profile) return;
+    if (!window.confirm(`Confirmer l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
+    setAdminBusy(true);
+    setError("");
+    try {
+      await postAdmin(
+        { action: "confirm_achievement", achievementId },
+        `${label} marqué comme obtenu pour ${profile.config.displayName}.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur de confirmation");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
   return (
     <main className={`shell theme-${tone}`}>
       <header>
@@ -641,14 +663,24 @@ export default function Dashboard() {
             <div><span>Temps correspondant</span><b>{profile ? <>{daysHours(profile.totals.titleRemainingSeconds)}<small>{hoursMinutes(profile.totals.titleRemainingSeconds)}</small></> : "—"}</b></div>
             <div><span>Moyenne théorique</span><b>~714 récompenses</b></div>
           </div>
+          <div className="session-admin-toolbar">
+            <small>{achievementText(profile?.achievements.title)}</small>
+            {admin && profile && !profile.achievements.title && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("title", "Titre")}>Confirmer l’obtention</button>}
+          </div>
         </article>
         <article className="card target">
-          <div className="target-head"><div><span className="pill">0,04 % / récompense</span><h2>⚡ Ultra Instinct</h2></div><strong>{profile ? percent(profile.totals.ultraChance) : "—"}</strong></div>
+          <div className="target-head"><div><span className="pill">0,04 % / récompense</span><h2>⚡ Mythic Power</h2></div><strong>{profile ? percent(profile.totals.ultraChance) : "—"}</strong></div>
           <div className="bar"><i style={{ width: `${Math.min(100, (profile?.totals.ultraChance || 0) * 100)}%` }} /></div>
           <div className="target-details">
             <div><span>Estimé restant avant la moyenne</span><b>{profile ? `${profile.totals.ultraRemainingRewards} récompenses` : "—"}</b></div>
             <div><span>Temps correspondant</span><b>{profile ? <>{daysHours(profile.totals.ultraRemainingSeconds)}<small>{hoursMinutes(profile.totals.ultraRemainingSeconds)}</small></> : "—"}</b></div>
             <div><span>Moyenne théorique</span><b>2500 récompenses</b></div>
+          </div>
+          <div className="session-admin-toolbar">
+            <small><b>Ultra Instinct</b> · {achievementText(profile?.achievements.ultra_instinct)}</small>
+            {admin && profile && !profile.achievements.ultra_instinct && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("ultra_instinct", "Ultra Instinct")}>Confirmer Ultra Instinct</button>}
+            <small><b>Rumor</b> · {achievementText(profile?.achievements.rumor)}</small>
+            {admin && profile && !profile.achievements.rumor && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("rumor", "Rumor")}>Confirmer Rumor</button>}
           </div>
         </article>
       </section>
