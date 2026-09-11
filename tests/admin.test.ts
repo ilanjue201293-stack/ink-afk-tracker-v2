@@ -81,3 +81,22 @@ test("le mode désynchronisé accepte les valeurs manuelles indépendantes", () 
   assert.equal(record.sessions[0].totalAfkBefore, 111);
   assert.equal(record.sessions[0].totalAfkAfter, 222);
 });
+
+test("confirmer une récompense rare enregistre un snapshot sans changer les totaux", () => {
+  const record = createDefaultRecord("ilan");
+  const now = 2_000_000;
+  const before = totalsFrom(record);
+  applyAdminActionToRecord(record, "ilan", { action: "confirm_achievement", achievementId: "rumor" }, now);
+  assert.deepEqual(totalsFrom(record), before);
+  assert.deepEqual(record.achievements.rumor, {
+    id: "rumor",
+    obtainedAt: now,
+    totalRewardsAt: 170,
+    totalAfkSecondsAt: 71 * 3600,
+  });
+  assert.match(record.logs[0].title, /Rumor obtenu/);
+  assert.throws(
+    () => applyAdminActionToRecord(record, "ilan", { action: "confirm_achievement", achievementId: "rumor" }, now + 1),
+    /déjà confirmé/,
+  );
+});
