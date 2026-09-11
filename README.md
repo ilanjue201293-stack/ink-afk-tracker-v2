@@ -29,7 +29,10 @@ Le bouton `ADMIN` utilise uniquement `ADMIN_SECRET`. Une fois connecté, les cra
 - création, modification et suppression de sessions ;
 - sélection de plusieurs sessions puis fusion, en incluant la fausse coupure ;
 - recalcul automatique de la durée, des récompenses, du temps crédité et des totaux ;
-- option explicite `Désynchroniser les changements` pour conserver des valeurs manuelles indépendantes sur une session.
+- option explicite `Désynchroniser les changements` pour conserver des valeurs manuelles indépendantes sur une session ;
+- confirmation séparée de l’obtention du Titre, d’Ultra Instinct et de Rumor. Ultra Instinct et Rumor sont regroupés visuellement sous `Mythic Power` tout en restant suivis séparément.
+
+Chaque confirmation d’obtention mémorise la date, le nombre total de récompenses et le temps AFK total au moment de la confirmation.
 
 Toutes les actions restent isolées par profil et sont inscrites dans les logs.
 
@@ -92,6 +95,7 @@ ink:v2:profiles:ilan:stats
 ink:v2:profiles:ilan:sessions
 ink:v2:profiles:ilan:adjustments
 ink:v2:profiles:ilan:logs
+ink:v2:profiles:ilan:achievements
 ```
 
 Le même schéma est utilisé avec les préfixes `ruben` et `naim`.
