@@ -115,6 +115,17 @@ export type TrackerLog = {
   sessionId?: string;
 };
 
+export type AchievementId = "title" | "ultra_instinct" | "rumor";
+
+export type AchievementRecord = {
+  id: AchievementId;
+  obtainedAt: number;
+  totalRewardsAt: number;
+  totalAfkSecondsAt: number;
+};
+
+export type ProfileAchievements = Record<AchievementId, AchievementRecord | null>;
+
 export type ProfileRecord = {
   state: ProfileState | null;
   base: ProfileBase;
@@ -122,6 +133,7 @@ export type ProfileRecord = {
   sessions: CompletedSession[];
   adjustments: ManualAdjustment[];
   logs: TrackerLog[];
+  achievements: ProfileAchievements;
 };
 
 export type ProfileTotals = {
@@ -134,6 +146,7 @@ export type ProfileStatus = {
   state: ProfileState | null;
   stats: ProfileStats;
   logs: TrackerLog[];
+  achievements: ProfileAchievements;
   totals: ProfileTotals & {
     baseAfkSeconds: number;
     baseRewards: number;
