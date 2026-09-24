@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AchievementId, AchievementRecord, CompletedSession, ProfileId, ProfileStatus, SessionEndReason } from "@/lib/types";
+import type { AchievementId, AchievementRecord, CompletedSession, ProfileId, ProfileStatus, SessionEndReason, SessionView } from "@/lib/types";
 
 type DashboardResponse = {
   checkedAt: number;
@@ -145,7 +145,7 @@ type SessionDraft = {
   totalRewardsAfter: number;
 };
 
-function sessionDraft(session: CompletedSession): SessionDraft {
+function sessionDraft(session: SessionView): SessionDraft {
   return {
     startedAt: dateInput(session.startedAt),
     endedAt: dateInput(session.endedAt),
@@ -155,7 +155,7 @@ function sessionDraft(session: CompletedSession): SessionDraft {
     creditedMinutes: session.creditedAfkSeconds / 60,
     endReason: session.endReason,
     endLabel: session.endLabel,
-    reason: "Correction de session",
+    reason: session.active ? "Correction de session en cours" : "Correction de session",
     synchronized: session.synchronized !== false,
     totalAfkBefore: session.totalAfkBefore,
     totalAfkAfter: session.totalAfkAfter,
@@ -202,7 +202,7 @@ function SessionModal({
   onSave,
   onDelete,
 }: {
-  session: CompletedSession | null;
+  session: SessionView | null;
   admin: boolean;
   initialDraft?: SessionDraft;
   onClose: () => void;
@@ -266,14 +266,14 @@ function SessionModal({
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal card" role="dialog" aria-modal="true" aria-label="Détail de la session" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <div><span className="eyebrow">SESSION</span><h2>{creating ? "Créer une session" : "Détail complet"}</h2></div>
+          <div><span className="eyebrow">{session?.active ? "SESSION EN COURS" : "SESSION"}</span><h2>{creating ? "Créer une session" : session?.active ? "Session en cours" : "Détail complet"}</h2></div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Fermer">×</button>
         </div>
 
         {!editing && session ? (
           <div className="session-detail-grid">
             <DetailCell label="Début" value={dateTime(session.startedAt)} admin={admin} onEdit={() => setEditing(true)} />
-            <DetailCell label="Fin" value={dateTime(session.endedAt)} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Fin" value={session.active ? "En cours" : dateTime(session.endedAt)} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Durée réelle" value={exactDuration(session.durationSeconds)} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Temps crédité" value={hoursMinutes(session.creditedAfkSeconds)} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Récompenses gagnées" value={session.rewardsEarned} admin={admin} onEdit={() => setEditing(true)} />
@@ -282,7 +282,7 @@ function SessionModal({
             <DetailCell label="Total AFK après" value={hoursMinutes(session.totalAfkAfter)} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Récompenses avant" value={session.totalRewardsBefore} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Récompenses après" value={session.totalRewardsAfter} admin={admin} onEdit={() => setEditing(true)} />
-            <DetailCell label="Fin / raison" value={`${endReasonLabel(session.endReason)} · ${session.endLabel}`} admin={admin} onEdit={() => setEditing(true)} />
+            <DetailCell label="Fin / raison" value={session.active ? session.endLabel : `${endReasonLabel(session.endReason)} · ${session.endLabel}`} admin={admin} onEdit={() => setEditing(true)} />
             <DetailCell label="Synchronisation" value={session.synchronized === false ? "Désynchronisée" : "Automatique"} admin={admin} onEdit={() => setEditing(true)} />
             <div className="detail-cell"><span>Source</span><b>{session.source === "admin" ? "Modifiée manuellement" : "Automatique"}</b></div>
           </div>
@@ -402,7 +402,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState<Record<ProfileId, CompletedSession[]>>({ ilan: [], ruben: [], naim: [] });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
-  const [showCreateSession, setShowCreateSession] = useState(false);
+  const [showCreateSession, setShowCreateSession] = useState(false);\n  const [achievementSessionSelection, setAchievementSessionSelection] = useState<Record<AchievementId, string>>({ title: "", ultra_instinct: "", rumor: "" });
   const [selectedDay, setSelectedDay] = useState(INITIAL_PARIS_DATE);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -519,11 +519,22 @@ export default function Dashboard() {
 
   async function saveSession(draft: SessionDraft) {
     if (!selectedSession) return;
-    await postAdmin({
-      action: "update_session",
-      sessionId: selectedSession.id,
-      ...sessionPayload(draft),
-    }, "Session modifiée et données liées recalculées.");
+    if (selectedSession.active) {
+      await postAdmin({
+        action: "update_active_session",
+        sessionId: selectedSession.id,
+        startedAt: new Date(draft.startedAt).getTime(),
+        observedSeconds: draft.durationSeconds,
+        pendingDisconnectAt: null,
+        reason: draft.reason,
+      }, "Session en cours modifiée.");
+    } else {
+      await postAdmin({
+        action: "update_session",
+        sessionId: selectedSession.id,
+        ...sessionPayload(draft),
+      }, "Session modifiée et données liées recalculées.");
+    }
     setSelectedSessionId(null);
   }
 
@@ -533,7 +544,7 @@ export default function Dashboard() {
   }
 
   async function deleteSelectedSession() {
-    if (!selectedSession) return;
+    if (!selectedSession || selectedSession.active) return;
     await postAdmin(
       { action: "delete_session", sessionId: selectedSession.id, reason: "Suppression manuelle depuis le dashboard" },
       "Session supprimée et totaux recalculés.",
@@ -572,14 +583,14 @@ export default function Dashboard() {
     }
   }
 
-  async function confirmAchievement(achievementId: AchievementId, label: string) {
+  async function confirmAchievement(achievementId: AchievementId, label: string, sessionId: string) {
     if (!admin || !profile) return;
     if (!window.confirm(`Confirmer l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
     setAdminBusy(true);
     setError("");
     try {
       await postAdmin(
-        { action: "confirm_achievement", achievementId },
+        { action: "confirm_achievement", achievementId, sessionId: sessionId || null },
         `${label} marqué comme obtenu pour ${profile.config.displayName}.`,
       );
     } catch (reason) {
@@ -665,7 +676,13 @@ export default function Dashboard() {
           </div>
           <div className="session-admin-toolbar">
             <small>{achievementText(profile?.achievements.title)}</small>
-            {admin && profile && !profile.achievements.title && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("title", "Titre")}>Confirmer l’obtention</button>}
+            {admin && profile && !profile.achievements.title && <div className="achievement-picker">
+              <select value={achievementSessionSelection.title} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, title: event.target.value }))}>
+                <option value="">Choisir la session</option>
+                {profileSessions.map((session) => <option key={session.id} value={session.id}>{session.active ? "🟢 En cours" : "Session"} · {dateTime(session.startedAt)} · {exactDuration(session.durationSeconds)}</option>)}
+              </select>
+              <button className="button" type="button" disabled={adminBusy || !achievementSessionSelection.title} onClick={() => confirmAchievement("title", "Titre", achievementSessionSelection.title)}>Confirmer l’obtention</button>
+            </div>}
           </div>
         </article>
         <article className="card target">
@@ -678,9 +695,21 @@ export default function Dashboard() {
           </div>
           <div className="session-admin-toolbar">
             <small><b>Ultra Instinct</b> · {achievementText(profile?.achievements.ultra_instinct)}</small>
-            {admin && profile && !profile.achievements.ultra_instinct && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("ultra_instinct", "Ultra Instinct")}>Confirmer Ultra Instinct</button>}
+            {admin && profile && !profile.achievements.ultra_instinct && <div className="achievement-picker">
+              <select value={achievementSessionSelection.ultra_instinct} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, ultra_instinct: event.target.value }))}>
+                <option value="">Choisir la session</option>
+                {profileSessions.map((session) => <option key={session.id} value={session.id}>{session.active ? "🟢 En cours" : "Session"} · {dateTime(session.startedAt)} · {exactDuration(session.durationSeconds)}</option>)}
+              </select>
+              <button className="button" type="button" disabled={adminBusy || !achievementSessionSelection.ultra_instinct} onClick={() => confirmAchievement("ultra_instinct", "Ultra Instinct", achievementSessionSelection.ultra_instinct)}>Confirmer Ultra Instinct</button>
+            </div>}
             <small><b>Rumor</b> · {achievementText(profile?.achievements.rumor)}</small>
-            {admin && profile && !profile.achievements.rumor && <button className="button" type="button" disabled={adminBusy} onClick={() => confirmAchievement("rumor", "Rumor")}>Confirmer Rumor</button>}
+            {admin && profile && !profile.achievements.rumor && <div className="achievement-picker">
+              <select value={achievementSessionSelection.rumor} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, rumor: event.target.value }))}>
+                <option value="">Choisir la session</option>
+                {profileSessions.map((session) => <option key={session.id} value={session.id}>{session.active ? "🟢 En cours" : "Session"} · {dateTime(session.startedAt)} · {exactDuration(session.durationSeconds)}</option>)}
+              </select>
+              <button className="button" type="button" disabled={adminBusy || !achievementSessionSelection.rumor} onClick={() => confirmAchievement("rumor", "Rumor", achievementSessionSelection.rumor)}>Confirmer Rumor</button>
+            </div>}
           </div>
         </article>
       </section>
@@ -693,7 +722,7 @@ export default function Dashboard() {
       <Calendar sessions={profileSessions} selectedDay={selectedDay} onSelectDay={setSelectedDay} />
       <section className="card day-sessions">
         <div className="section-title"><div><span className="eyebrow">JOUR SÉLECTIONNÉ</span><h2>{selectedDay.split("-").reverse().join("/")}</h2></div><span className="muted">{selectedDaySessions.length} session(s)</span></div>
-        {selectedDaySessions.length === 0 ? <div className="empty">Aucune session enregistrée ce jour-là.</div> : <div className="compact-sessions">{selectedDaySessions.map((session) => <button type="button" key={session.id} onClick={() => setSelectedSessionId(session.id)}><b>{dateTime(session.startedAt)}</b><span>{exactDuration(session.durationSeconds)} · {session.rewardsEarned} récompense(s)</span></button>)}</div>}
+        {selectedDaySessions.length === 0 ? <div className="empty">Aucune session enregistrée ce jour-là.</div> : <div className="compact-sessions">{selectedDaySessions.map((session) => <button type="button" key={session.id} onClick={() => setSelectedSessionId(session.id)}><b>{dateTime(session.startedAt)}</b><span>{session.active ? "🟢 EN COURS · " : ""}{exactDuration(session.durationSeconds)} · {session.rewardsEarned} récompense(s)</span></button>)}</div>}
       </section>
 
       <section className="lower-grid">
@@ -708,7 +737,7 @@ export default function Dashboard() {
             <button className="button secondary" type="button" disabled={adminBusy || selectedSessionIds.length < 2} onClick={mergeSelectedSessions}>Fusionner ({selectedSessionIds.length})</button>
             <small>Sélectionne plusieurs sessions pour réunir une fausse coupure, interruption comprise.</small>
           </div>}
-          {profileSessions.length === 0 ? <div className="empty">Aucune session terminée pour ce profil.</div> : <div className="session-list">{profileSessions.map((session) => <div className="session-row" key={session.id}>{admin && <label className="session-select" title="Sélectionner pour fusionner"><input type="checkbox" checked={selectedSessionIdSet.has(session.id)} onChange={() => toggleSessionSelection(session.id)} /><span /></label>}<button type="button" onClick={() => setSelectedSessionId(session.id)}><span><b>{dateTime(session.startedAt)}</b><small>{session.endLabel}{session.synchronized === false ? " · désynchronisée" : ""}</small></span><span className="session-metrics"><b>{exactDuration(session.durationSeconds)}</b><small>{session.rewardsEarned} récompense(s) · {hoursMinutes(session.creditedAfkSeconds)} créditées</small></span>{admin && <span className="row-pencil" aria-hidden="true">✎</span>}</button></div>)}</div>}
+          {profileSessions.length === 0 ? <div className="empty">Aucune session enregistrée pour ce profil.</div> : <div className="session-list">{profileSessions.map((session) => <div className="session-row" key={session.id}>{admin && <label className="session-select" title="Sélectionner pour fusionner"><input type="checkbox" checked={selectedSessionIdSet.has(session.id)} onChange={() => toggleSessionSelection(session.id)} /><span /></label>}<button type="button" onClick={() => setSelectedSessionId(session.id)}><span><b>{dateTime(session.startedAt)}</b><small>{session.active ? "🟢 EN COURS · " : ""}{session.endLabel}{session.synchronized === false ? " · désynchronisée" : ""}</small></span><span className="session-metrics"><b>{exactDuration(session.durationSeconds)}</b><small>{session.rewardsEarned} récompense(s) · {hoursMinutes(session.creditedAfkSeconds)} créditées</small></span>{admin && <span className="row-pencil" aria-hidden="true">✎</span>}</button></div>)}</div>}
         </article>
       </section>
 
