@@ -186,19 +186,6 @@ function newSessionDraft(intervalMinutes: number, totalAfkSeconds: number, total
 }
 
 function DetailCell({ label, value, admin, onEdit }: { label: string; value: React.ReactNode; admin: boolean; onEdit: () => void }) {
-  async function cancelAchievement(achievementId: AchievementId, label: string) {
-    if (!admin || !profile) return;
-    if (!window.confirm(`Annuler l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
-    setAdminBusy(true);
-    setError("");
-    try {
-      await postAdmin({ action: "cancel_achievement", achievementId, reason: `Annulation de ${label}` }, `${label} remis comme non obtenu pour ${profile.config.displayName}.`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Erreur d’annulation");
-    } finally {
-      setAdminBusy(false);
-    }
-  }
   return (
     <div className="detail-cell">
       <span>{label}</span>
@@ -450,7 +437,20 @@ export default function Dashboard() {
   useEffect(() => {
     const initial = setTimeout(loadStatus, 0);
     const timer = setInterval(loadStatus, 10_000);
-    return () => { clearTimeout(initial); clearInterval(timer); };
+    async function cancelAchievement(achievementId: AchievementId, label: string) {
+    if (!admin || !profile) return;
+    if (!window.confirm(`Annuler l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
+    setAdminBusy(true);
+    setError("");
+    try {
+      await postAdmin({ action: "cancel_achievement", achievementId, reason: `Annulation de ${label}` }, `${label} remis comme non obtenu pour ${profile.config.displayName}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur d’annulation");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+  return () => { clearTimeout(initial); clearInterval(timer); };
   }, [loadStatus]);
 
   useEffect(() => {
