@@ -61,7 +61,7 @@ function statusFor(profileId: ProfileId, record: ProfileRecord, now: number): Pr
       sessionStartedAt: record.state?.activeSession?.startedAt || null,
       disconnectPending: Boolean(record.state?.activeSession?.pendingDisconnectAt),
     },
-    sessionsToday: record.sessions.filter((session) => parisDateKey(session.startedAt) === today).length,
+    sessionsToday: record.sessions.filter((session) => parisDateKey(session.startedAt) === today).length + (record.state?.activeSession && parisDateKey(record.state.activeSession.startedAt) === today ? 1 : 0),
   };
 }
 
@@ -378,10 +378,10 @@ function mergeSessions(record: ProfileRecord, profileId: ProfileId, input: Recor
     record,
     adminLog(
       profileId,
-      `${selected.length} sessions fusionnées`,
+      `${selected.length + (active ? 1 : 0)} sessions fusionnées`,
       textField(input.reason, "Fausse déconnexion corrigée · interruption incluse dans la durée"),
       now,
-      merged.id,
+      active?.id || merged.id,
     ),
   );
 }
