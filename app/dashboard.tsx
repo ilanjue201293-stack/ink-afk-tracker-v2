@@ -437,19 +437,6 @@ export default function Dashboard() {
   useEffect(() => {
     const initial = setTimeout(loadStatus, 0);
     const timer = setInterval(loadStatus, 10_000);
-    async function cancelAchievement(achievementId: AchievementId, label: string) {
-    if (!admin || !profile) return;
-    if (!window.confirm(`Annuler l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
-    setAdminBusy(true);
-    setError("");
-    try {
-      await postAdmin({ action: "cancel_achievement", achievementId, reason: `Annulation de ${label}` }, `${label} remis comme non obtenu pour ${profile.config.displayName}.`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Erreur d’annulation");
-    } finally {
-      setAdminBusy(false);
-    }
-  }
   return () => { clearTimeout(initial); clearInterval(timer); };
   }, [loadStatus]);
 
@@ -609,6 +596,20 @@ export default function Dashboard() {
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Erreur de confirmation");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
+  async function cancelAchievement(achievementId: AchievementId, label: string) {
+    if (!admin || !profile) return;
+    if (!window.confirm(`Annuler l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
+    setAdminBusy(true);
+    setError("");
+    try {
+      await postAdmin({ action: "cancel_achievement", achievementId, reason: `Annulation de ${label}` }, `${label} remis comme non obtenu pour ${profile.config.displayName}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur d’annulation");
     } finally {
       setAdminBusy(false);
     }
