@@ -125,7 +125,7 @@ export type AchievementId = "title" | "ultra_instinct" | "rumor";
 export type AchievementRecord = {
   id: AchievementId;
   obtainedAt: number;
-  sessionId: string | null;
+  sessionId?: string | null;
   totalRewardsAt: number;
   totalAfkSecondsAt: number;
 };
