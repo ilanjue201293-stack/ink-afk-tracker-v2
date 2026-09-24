@@ -186,6 +186,19 @@ function newSessionDraft(intervalMinutes: number, totalAfkSeconds: number, total
 }
 
 function DetailCell({ label, value, admin, onEdit }: { label: string; value: React.ReactNode; admin: boolean; onEdit: () => void }) {
+  async function cancelAchievement(achievementId: AchievementId, label: string) {
+    if (!admin || !profile) return;
+    if (!window.confirm(`Annuler l’obtention de ${label} pour ${profile.config.displayName} ?`)) return;
+    setAdminBusy(true);
+    setError("");
+    try {
+      await postAdmin({ action: "cancel_achievement", achievementId, reason: `Annulation de ${label}` }, `${label} remis comme non obtenu pour ${profile.config.displayName}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur d’annulation");
+    } finally {
+      setAdminBusy(false);
+    }
+  }
   return (
     <div className="detail-cell">
       <span>{label}</span>
@@ -676,7 +689,7 @@ export default function Dashboard() {
             <div><span>Moyenne théorique</span><b>~714 récompenses</b></div>
           </div>
           <div className="session-admin-toolbar">
-            <small>{achievementText(profile?.achievements.title)}</small>
+            <small>{achievementText(profile?.achievements.title)}\n            {admin && profile?.achievements.title && <button className="button secondary" type="button" disabled={adminBusy} onClick={() => cancelAchievement("title", "Titre")}>Annuler l’obtention</button>}</small>
             {admin && profile && !profile.achievements.title && <div className="achievement-picker">
               <select value={achievementSessionSelection.title} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, title: event.target.value }))}>
                 <option value="">Choisir la session</option>
@@ -695,7 +708,7 @@ export default function Dashboard() {
             <div><span>Moyenne théorique</span><b>2500 récompenses</b></div>
           </div>
           <div className="session-admin-toolbar">
-            <small><b>Ultra Instinct</b> · {achievementText(profile?.achievements.ultra_instinct)}</small>
+            <small><b>Ultra Instinct</b> · {achievementText(profile?.achievements.ultra_instinct)}</small>\n            {admin && profile?.achievements.ultra_instinct && <button className="button secondary" type="button" disabled={adminBusy} onClick={() => cancelAchievement("ultra_instinct", "Ultra Instinct")}>Annuler l’obtention</button>}
             {admin && profile && !profile.achievements.ultra_instinct && <div className="achievement-picker">
               <select value={achievementSessionSelection.ultra_instinct} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, ultra_instinct: event.target.value }))}>
                 <option value="">Choisir la session</option>
@@ -703,7 +716,7 @@ export default function Dashboard() {
               </select>
               <button className="button" type="button" disabled={adminBusy || !achievementSessionSelection.ultra_instinct} onClick={() => confirmAchievement("ultra_instinct", "Ultra Instinct", achievementSessionSelection.ultra_instinct)}>Confirmer Ultra Instinct</button>
             </div>}
-            <small><b>Rumor</b> · {achievementText(profile?.achievements.rumor)}</small>
+            <small><b>Rumor</b> · {achievementText(profile?.achievements.rumor)}</small>\n            {admin && profile?.achievements.rumor && <button className="button secondary" type="button" disabled={adminBusy} onClick={() => cancelAchievement("rumor", "Rumor")}>Annuler l’obtention</button>}
             {admin && profile && !profile.achievements.rumor && <div className="achievement-picker">
               <select value={achievementSessionSelection.rumor} onChange={(event) => setAchievementSessionSelection((current) => ({ ...current, rumor: event.target.value }))}>
                 <option value="">Choisir la session</option>
