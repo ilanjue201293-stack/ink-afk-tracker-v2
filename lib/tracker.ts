@@ -392,6 +392,16 @@ const ACHIEVEMENT_LABELS: Record<AchievementId, string> = {
   rumor: "Rumor",
 };
 
+function cancelAchievement(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  if (typeof input.achievementId !== "string" || !(input.achievementId in ACHIEVEMENT_LABELS)) throw new Error("Récompense invalide");
+  const achievementId = input.achievementId as AchievementId;
+  const label = ACHIEVEMENT_LABELS[achievementId];
+  const existing = record.achievements[achievementId];
+  if (!existing) throw new Error("Cette obtention n’est pas confirmée");
+  record.achievements[achievementId] = null;
+  addLog(record, adminLog(profileId, `${label} obtention annulée`, textField(input.reason, "Annulation manuelle de l’obtention"), now, existing.sessionId || undefined));
+}
+
 function confirmAchievement(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
   if (typeof input.achievementId !== "string" || !(input.achievementId in ACHIEVEMENT_LABELS)) {
     throw new Error("Récompense invalide");
@@ -456,6 +466,7 @@ export function applyAdminActionToRecord(
   else if (action === "delete_session") deleteSession(record, profileId, body, now);
   else if (action === "merge_sessions") mergeSessions(record, profileId, body, now);
   else if (action === "confirm_achievement") confirmAchievement(record, profileId, body, now);
+  else if (action === "cancel_achievement") cancelAchievement(record, profileId, body, now);
   else throw new Error("Action admin inconnue");
   return record;
 }
