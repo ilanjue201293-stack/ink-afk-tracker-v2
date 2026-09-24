@@ -9,6 +9,7 @@ import {
   probabilitySummary,
   parisDateKey,
   rebuildDerived,
+  rewardCredit,
   synchronizedSessionValues,
   totalsFrom,
 } from "./domain";
@@ -25,6 +26,7 @@ import type {
   ProfileRecord,
   ProfileStatus,
   SessionEndReason,
+  SessionView,
 } from "./types";
 
 function statusFor(profileId: ProfileId, record: ProfileRecord, now: number): ProfileStatus {
@@ -74,7 +76,31 @@ export async function getStatus() {
 
 export async function getSessions(profileId: ProfileId) {
   const records = await loadAllRecords();
-  return { profileId, sessions: records[profileId].sessions };
+  const record = records[profileId];
+  const now = Date.now();
+  const active = record.state?.activeSession;
+  const activeView: SessionView | null = active
+    ? (() => {
+        const liveExtra = record.state?.isAfkWorld && record.state.lastCheckedAt
+          ? Math.min(LIVE_EXTRAPOLATION_SECONDS, Math.max(0, Math.floor((now - record.state.lastCheckedAt) / 1000)))
+          : 0;
+        const observedSeconds = active.observedSeconds + liveExtra;
+        const credit = rewardCredit(observedSeconds, PROFILES[profileId].rewardIntervalMinutes);
+        const totals = totalsFrom(record);
+        return {
+          id: active.id, profileId, startedAt: active.startedAt, endedAt: now,
+          durationSeconds: observedSeconds,
+          rewardIntervalMinutes: PROFILES[profileId].rewardIntervalMinutes,
+          rewardsEarned: credit.rewards, creditedAfkSeconds: credit.creditedAfkSeconds,
+          totalAfkBefore: totals.totalAfkSeconds, totalAfkAfter: totals.totalAfkSeconds + credit.creditedAfkSeconds,
+          totalRewardsBefore: totals.totalRewards, totalRewardsAfter: totals.totalRewards + credit.rewards,
+          endReason: "manual", endLabel: active.pendingDisconnectAt ? "En cours · déconnexion en attente" : "En cours · AFK World",
+          createdAt: active.startedAt, updatedAt: now, source: "automatic", synchronized: true,
+          active: true, liveObservedSeconds: observedSeconds,
+        };
+      })()
+    : null;
+  return { profileId, sessions: activeView ? [activeView, ...record.sessions] : record.sessions };
 }
 
 export async function runCheck() {
@@ -283,18 +309,33 @@ function deleteSession(record: ProfileRecord, profileId: ProfileId, input: Recor
   );
 }
 
+function updateActiveSession(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
+  const active = record.state?.activeSession;
+  if (!active) throw new Error("Aucune session en cours");
+  const sessionId = textField(input.sessionId, active.id);
+  if (sessionId !== active.id) throw new Error("Session en cours introuvable");
+  active.startedAt = Math.floor(numberField(input.startedAt, "Début", 1));
+  active.observedSeconds = Math.floor(numberField(input.observedSeconds ?? input.durationSeconds, "Durée", 0));
+  if (input.pendingDisconnectAt !== undefined) {
+    active.pendingDisconnectAt = input.pendingDisconnectAt === null ? null : Math.floor(numberField(input.pendingDisconnectAt, "Déconnexion en attente", 0));
+  }
+  record.state = { ...record.state!, activeSession: active };
+  addLog(record, adminLog(profileId, "Session en cours modifiée", textField(input.reason, "Correction de session en cours"), now, active.id));
+}
+
 function mergeSessions(record: ProfileRecord, profileId: ProfileId, input: Record<string, unknown>, now: number) {
   const requestedIds = Array.isArray(input.sessionIds)
     ? [...new Set(input.sessionIds.filter((value): value is string => typeof value === "string" && value.length > 0))]
     : [];
   if (requestedIds.length < 2) throw new Error("Sélectionnez au moins deux sessions à fusionner");
+  const active = record.state?.activeSession && requestedIds.includes(record.state.activeSession.id) ? record.state.activeSession : null;
   const selected = record.sessions
     .filter((session) => requestedIds.includes(session.id))
     .sort((left, right) => left.startedAt - right.startedAt);
-  if (selected.length !== requestedIds.length) throw new Error("Une session sélectionnée est introuvable");
+  if (selected.length + (active ? 1 : 0) !== requestedIds.length) throw new Error("Une session sélectionnée est introuvable");
 
-  const startedAt = Math.min(...selected.map((session) => session.startedAt));
-  const endedAt = Math.max(...selected.map((session) => session.endedAt));
+  const startedAt = Math.min(...selected.map((session) => session.startedAt).concat(active ? [active.startedAt] : []));
+  const endedAt = active ? now : Math.max(...selected.map((session) => session.endedAt));
   const interval = PROFILES[profileId].rewardIntervalMinutes;
   const synced = synchronizedSessionValues(startedAt, endedAt, interval);
   const lastSession = [...selected].sort((left, right) => right.endedAt - left.endedAt)[0];
@@ -311,15 +352,27 @@ function mergeSessions(record: ProfileRecord, profileId: ProfileId, input: Recor
     totalAfkAfter: 0,
     totalRewardsBefore: 0,
     totalRewardsAfter: 0,
-    endReason: lastSession.endReason,
-    endLabel: `Fusion de ${selected.length} sessions · ${lastSession.endLabel}`,
+    endReason: active ? "manual" : lastSession.endReason,
+    endLabel: active ? `Fusion de ${selected.length + 1} sessions · session en cours conservée` : `Fusion de ${selected.length} sessions · ${lastSession.endLabel}`,
     createdAt: Math.min(...selected.map((session) => session.createdAt)),
     updatedAt: now,
     source: "admin",
     synchronized: true,
   };
   record.sessions = record.sessions.filter((session) => !requestedIds.includes(session.id));
-  record.sessions.push(merged);
+  if (active) {
+    record.state = {
+      ...record.state!,
+      activeSession: {
+        ...active,
+        startedAt,
+        observedSeconds: Math.max(0, Math.floor((endedAt - startedAt) / 1000)),
+        pendingDisconnectAt: null,
+      },
+    };
+  } else {
+    record.sessions.push(merged);
+  }
   rebuildRecord(record, now);
   addLog(
     record,
@@ -345,14 +398,33 @@ function confirmAchievement(record: ProfileRecord, profileId: ProfileId, input: 
   }
   const achievementId = input.achievementId as AchievementId;
   const label = ACHIEVEMENT_LABELS[achievementId];
-  if (record.achievements[achievementId]) throw new Error(`${label} est déjà confirmé comme obtenu`);
+  if (record.achievements[achievementId]) throw new Error(\`${label} est déjà confirmé comme obtenu\`);
+
+  const sessionId = typeof input.sessionId === "string" ? input.sessionId : null;
+  const session = sessionId ? record.sessions.find((item) => item.id === sessionId) : null;
+  const active = record.state?.activeSession && record.state.activeSession.id === sessionId ? record.state.activeSession : null;
+  if (sessionId && !session && !active) throw new Error("Session de récompense introuvable");
 
   const totals = totalsFrom(record);
+  let obtainedAt = now;
+  let totalRewardsAt = totals.totalRewards;
+  let totalAfkSecondsAt = totals.totalAfkSeconds;
+  if (session) {
+    obtainedAt = session.endedAt;
+    totalRewardsAt = session.totalRewardsAfter;
+    totalAfkSecondsAt = session.totalAfkAfter;
+  } else if (active) {
+    const liveExtra = record.state?.isAfkWorld && record.state.lastCheckedAt
+      ? Math.min(LIVE_EXTRAPOLATION_SECONDS, Math.max(0, Math.floor((now - record.state.lastCheckedAt) / 1000)))
+      : 0;
+    const observedSeconds = active.observedSeconds + liveExtra;
+    const credit = rewardCredit(observedSeconds, PROFILES[profileId].rewardIntervalMinutes);
+    obtainedAt = active.startedAt + credit.creditedAfkSeconds * 1000;
+    totalRewardsAt = totals.totalRewards + credit.rewards;
+    totalAfkSecondsAt = totals.totalAfkSeconds + credit.creditedAfkSeconds;
+  }
   record.achievements[achievementId] = {
-    id: achievementId,
-    obtainedAt: now,
-    totalRewardsAt: totals.totalRewards,
-    totalAfkSecondsAt: totals.totalAfkSeconds,
+    id: achievementId, obtainedAt, sessionId, totalRewardsAt, totalAfkSecondsAt,
   };
 
   const totalMinutes = Math.floor(totals.totalAfkSeconds / 60);
@@ -379,6 +451,7 @@ export function applyAdminActionToRecord(
   if (action === "update_totals") updateTotals(record, profileId, body, now);
   else if (action === "update_base") updateBase(record, profileId, body, now);
   else if (action === "update_session") updateSession(record, profileId, body, now);
+  else if (action === "update_active_session") updateActiveSession(record, profileId, body, now);
   else if (action === "create_session") createSession(record, profileId, body, now);
   else if (action === "delete_session") deleteSession(record, profileId, body, now);
   else if (action === "merge_sessions") mergeSessions(record, profileId, body, now);
