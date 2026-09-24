@@ -398,7 +398,7 @@ function confirmAchievement(record: ProfileRecord, profileId: ProfileId, input: 
   }
   const achievementId = input.achievementId as AchievementId;
   const label = ACHIEVEMENT_LABELS[achievementId];
-  if (record.achievements[achievementId]) throw new Error(\`${label} est déjà confirmé comme obtenu\`);
+  if (record.achievements[achievementId]) throw new Error(`${label} est déjà confirmé comme obtenu`);
 
   const sessionId = typeof input.sessionId === "string" ? input.sessionId : null;
   const session = sessionId ? record.sessions.find((item) => item.id === sessionId) : null;
