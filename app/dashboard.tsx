@@ -399,7 +399,7 @@ function LiveSessionCounter({
 export default function Dashboard() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [profileId, setProfileId] = useState<ProfileId>("ilan");
-  const [sessions, setSessions] = useState<Record<ProfileId, CompletedSession[]>>({ ilan: [], ruben: [], naim: [] });
+  const [sessions, setSessions] = useState<Record<ProfileId, SessionView[]>>({ ilan: [], ruben: [], naim: [] });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [showCreateSession, setShowCreateSession] = useState(false);
