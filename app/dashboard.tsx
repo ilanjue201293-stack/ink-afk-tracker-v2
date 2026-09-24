@@ -402,7 +402,8 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState<Record<ProfileId, CompletedSession[]>>({ ilan: [], ruben: [], naim: [] });
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
-  const [showCreateSession, setShowCreateSession] = useState(false);\n  const [achievementSessionSelection, setAchievementSessionSelection] = useState<Record<AchievementId, string>>({ title: "", ultra_instinct: "", rumor: "" });
+  const [showCreateSession, setShowCreateSession] = useState(false);
+  const [achievementSessionSelection, setAchievementSessionSelection] = useState<Record<AchievementId, string>>({ title: "", ultra_instinct: "", rumor: "" });
   const [selectedDay, setSelectedDay] = useState(INITIAL_PARIS_DATE);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
